@@ -19,7 +19,7 @@ async def get_position(query: str, sku: str, max_positions: int = 100):
 
     async with async_playwright() as p:
         browser = await p.chromium.launch(
-            headless=True,
+            headless=False,  # можно True для финального запуска
             args=[
                 '--disable-blink-features=AutomationControlled',
                 '--no-sandbox',
@@ -46,12 +46,16 @@ async def get_position(query: str, sku: str, max_positions: int = 100):
 
                 await asyncio.sleep(random.uniform(2, 4))
 
-                # Проверка на капчу
                 title = await page.title()
                 if 'Antibot' in title or 'Доступ ограничен' in title:
-                    print("Капча, ждём 30 сек", file=sys.stderr)
-                    await asyncio.sleep(30)
-                    continue
+                    return {
+                        "query": query,
+                        "sku": sku,
+                        "position": "captcha",
+                        "page": page_num,
+                        "total_checked": positions_checked,
+                        "timestamp": datetime.now().isoformat()
+                    }
 
                 try:
                     await page.wait_for_selector('a[href*="/product/"]', timeout=5000)
@@ -62,23 +66,20 @@ async def get_position(query: str, sku: str, max_positions: int = 100):
                 if not product_links:
                     break
 
-                # --- Отладка: выводим первые 10 ссылок и артикулы ---
-                print("=== DEBUG: первые 10 ссылок ===", file=sys.stderr)
-                for i, link in enumerate(product_links[:10]):
-                    href = await link.get_attribute('href')
-                    match = re.search(r'/product/(\d+)', href)
-                    art = match.group(1) if match else "N/A"
-                    print(f"{i+1}. {href} -> артикул: {art}", file=sys.stderr)
-                print("=== END DEBUG ===", file=sys.stderr)
-                # --------------------------------------------------
-
                 for link in product_links:
                     if positions_checked >= max_positions:
                         break
                     positions_checked += 1
                     href = await link.get_attribute('href')
-                    match = re.search(r'/product/(\d+)', href)
-                    if match and match.group(1) == str(sku):
+                    # Пытаемся извлечь артикул после последнего дефиса перед /?
+                    match = re.search(r'/(\d+)/\?', href)
+                    if match:
+                        art = match.group(1)
+                    else:
+                        # fallback: первая группа цифр
+                        digits = re.findall(r'\d+', href)
+                        art = digits[0] if digits else None
+                    if art and art == str(sku):
                         return {
                             "query": query,
                             "sku": sku,
