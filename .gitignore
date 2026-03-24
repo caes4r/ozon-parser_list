@@ -5,6 +5,7 @@ __pycache__/
 venv/
 .idea/
 *.log
+cookies.json
 
 # Playwright
 .cache/

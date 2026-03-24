@@ -3,6 +3,7 @@ import json
 import sys
 import re
 import random
+import os
 from datetime import datetime
 from playwright.async_api import async_playwright
 
@@ -12,6 +13,8 @@ USER_AGENTS = [
     'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
 ]
 
+COOKIES_FILE = 'cookies.json'
+
 async def get_position(query: str, sku: str, max_positions: int = 100):
     positions_checked = 0
     page_num = 1
@@ -19,17 +22,34 @@ async def get_position(query: str, sku: str, max_positions: int = 100):
 
     async with async_playwright() as p:
         browser = await p.chromium.launch(
-            headless=False,  # можно True для финального запуска
+            headless=True,  # для финального запуска
             args=[
                 '--disable-blink-features=AutomationControlled',
                 '--no-sandbox',
                 '--disable-setuid-sandbox',
             ]
         )
+
+        # Расширенные заголовки
+        headers = {
+            'Accept-Language': random.choice(['ru-RU,ru;q=0.9', 'ru;q=0.8,en;q=0.7', 'en-US,en;q=0.9']),
+            'Accept-Encoding': 'gzip, deflate, br',
+            'Referer': random.choice(['https://www.google.com/', 'https://yandex.ru/', '']),
+            'DNT': '1',
+        }
+
         context = await browser.new_context(
             user_agent=random.choice(USER_AGENTS),
-            viewport={'width': 1280, 'height': 800}
+            viewport={'width': 1280, 'height': 800},
+            extra_http_headers=headers
         )
+
+        # Загружаем cookies из файла, если есть
+        if os.path.exists(COOKIES_FILE):
+            with open(COOKIES_FILE) as f:
+                cookies = json.load(f)
+            await context.add_cookies(cookies)
+
         page = await context.new_page()
 
         try:
@@ -44,7 +64,8 @@ async def get_position(query: str, sku: str, max_positions: int = 100):
                             raise
                         await asyncio.sleep(2 ** attempt)
 
-                await asyncio.sleep(random.uniform(2, 4))
+                # Увеличенная задержка после загрузки
+                await asyncio.sleep(random.uniform(3, 6))
 
                 title = await page.title()
                 if 'Antibot' in title or 'Доступ ограничен' in title:
@@ -71,12 +92,11 @@ async def get_position(query: str, sku: str, max_positions: int = 100):
                         break
                     positions_checked += 1
                     href = await link.get_attribute('href')
-                    # Пытаемся извлечь артикул после последнего дефиса перед /?
+                    # Извлечение артикула
                     match = re.search(r'/(\d+)/\?', href)
                     if match:
                         art = match.group(1)
                     else:
-                        # fallback: первая группа цифр
                         digits = re.findall(r'\d+', href)
                         art = digits[0] if digits else None
                     if art and art == str(sku):
@@ -90,7 +110,8 @@ async def get_position(query: str, sku: str, max_positions: int = 100):
                         }
 
                 page_num += 1
-                await asyncio.sleep(random.uniform(3, 6))
+                # Увеличенная задержка между страницами
+                await asyncio.sleep(random.uniform(5, 10))
 
             return {
                 "query": query,
@@ -102,6 +123,10 @@ async def get_position(query: str, sku: str, max_positions: int = 100):
             }
 
         finally:
+            # Сохраняем cookies в файл
+            cookies = await context.cookies()
+            with open(COOKIES_FILE, 'w') as f:
+                json.dump(cookies, f)
             await browser.close()
 
 def main():
