@@ -11,6 +11,7 @@ USER_AGENTS = [
     'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
     'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:109.0) Gecko/20100101 Firefox/115.0',
 ]
 
 COOKIES_FILE = 'cookies.json'
@@ -22,15 +23,19 @@ async def get_position(query: str, sku: str, max_positions: int = 100):
 
     async with async_playwright() as p:
         browser = await p.chromium.launch(
-            headless=True,  # для финального запуска
+            headless=False,  # для скринкаста оставляем False
             args=[
                 '--disable-blink-features=AutomationControlled',
                 '--no-sandbox',
                 '--disable-setuid-sandbox',
+                '--disable-web-security',
+                '--disable-features=IsolateOrigins,site-per-process',
+                '--disable-site-isolation-trials',
+                '--disable-accelerated-2d-canvas',
+                '--disable-gpu',
             ]
         )
 
-        # Расширенные заголовки
         headers = {
             'Accept-Language': random.choice(['ru-RU,ru;q=0.9', 'ru;q=0.8,en;q=0.7', 'en-US,en;q=0.9']),
             'Accept-Encoding': 'gzip, deflate, br',
@@ -41,16 +46,33 @@ async def get_position(query: str, sku: str, max_positions: int = 100):
         context = await browser.new_context(
             user_agent=random.choice(USER_AGENTS),
             viewport={'width': 1280, 'height': 800},
-            extra_http_headers=headers
+            extra_http_headers=headers,
+            locale='ru-RU',
+            timezone_id='Europe/Moscow',
+            color_scheme='light',
+            device_scale_factor=1,
+            has_touch=False,
+            is_mobile=False,
         )
 
-        # Загружаем cookies из файла, если есть
+        # Загрузка cookies
         if os.path.exists(COOKIES_FILE):
             with open(COOKIES_FILE) as f:
                 cookies = json.load(f)
             await context.add_cookies(cookies)
 
         page = await context.new_page()
+
+        # Ручная маскировка признаков автоматизации
+        await page.add_init_script("""
+            Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+            Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
+            Object.defineProperty(navigator, 'languages', { get: () => ['ru-RU', 'ru'] });
+            window.chrome = { runtime: {} };
+            Object.defineProperty(navigator, 'deviceMemory', { get: () => 8 });
+            Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => 8 });
+            Object.defineProperty(navigator, 'platform', { get: () => 'Win32' });
+        """)
 
         try:
             while positions_checked < max_positions:
@@ -64,7 +86,6 @@ async def get_position(query: str, sku: str, max_positions: int = 100):
                             raise
                         await asyncio.sleep(2 ** attempt)
 
-                # Увеличенная задержка после загрузки
                 await asyncio.sleep(random.uniform(3, 6))
 
                 title = await page.title()
@@ -92,7 +113,6 @@ async def get_position(query: str, sku: str, max_positions: int = 100):
                         break
                     positions_checked += 1
                     href = await link.get_attribute('href')
-                    # Извлечение артикула
                     match = re.search(r'/(\d+)/\?', href)
                     if match:
                         art = match.group(1)
@@ -110,7 +130,6 @@ async def get_position(query: str, sku: str, max_positions: int = 100):
                         }
 
                 page_num += 1
-                # Увеличенная задержка между страницами
                 await asyncio.sleep(random.uniform(5, 10))
 
             return {
@@ -123,7 +142,6 @@ async def get_position(query: str, sku: str, max_positions: int = 100):
             }
 
         finally:
-            # Сохраняем cookies в файл
             cookies = await context.cookies()
             with open(COOKIES_FILE, 'w') as f:
                 json.dump(cookies, f)
